@@ -88,33 +88,8 @@ const io = new Server(server, {
     pingInterval: 25000,
     pingTimeout: 120000
 });
-const DEMO_USER = Object.freeze({
-    sub: 'demo-user',
-    email: 'demo@memflow.ai',
-    name: 'Demo User'
-});
-
-const withOptionalDemoAuth = (authMiddleware) => {
-    if (!DEMO_MODE) return authMiddleware;
-    return (req, _res, next) => {
-        req.user = DEMO_USER;
-        next();
-    };
-};
-
-const withOptionalDemoSocketAuth = (socketAuthMiddleware) => {
-    if (!DEMO_MODE) return socketAuthMiddleware;
-    return (socket, next) => {
-        socket.user = DEMO_USER;
-        next();
-    };
-};
-
-const requireAuthMaybeDemo = withOptionalDemoAuth(requireAuth);
-const requireAuthSocketMaybeDemo = withOptionalDemoSocketAuth(requireAuthSocket);
-
 if (DEMO_MODE) {
-    console.warn('[Auth] DEMO_MODE enabled: authentication checks are bypassed and demo user context is injected.');
+    console.log('[Auth] Demo mode enabled — authentication bypassed');
 }
 
 const BEDROCK_MODEL_ID = process.env.BEDROCK_MODEL_ID || 'anthropic.claude-3-haiku-20240307-v1:0';
@@ -494,6 +469,7 @@ function generateLocalStepExplanation({ language, step, currentStepIndex }) {
     if (!step) {
         return localizeText(lang, 'explain_no_step');
     }
+    const pointerFocused = Boolean(step.addr) || /\*/.test(String(step.type || '')) || /pointer/i.test(String(step.type || ''));
     const lines = [
         localizeText(lang, 'explain_step_intro', {
             step: currentStepIndex + 1,
@@ -511,6 +487,9 @@ function generateLocalStepExplanation({ language, step, currentStepIndex }) {
     }
     if (step.addr) {
         lines.push(localizeText(lang, 'explain_var_addr', { addr: step.addr }));
+    }
+    if (pointerFocused) {
+        lines.push('Pointer view: track whether this step is using the address as data, reading through it, or writing into the memory at that address.');
     }
     lines.push(localizeText(lang, 'explain_next_focus'));
     return lines.join('\n');
@@ -955,28 +934,139 @@ function isCRelatedQuestion(text) {
     const cPatterns = [
         /\bc\b/,
         /c language|c programming/,
-        /\bgcc\b|printf|scanf|malloc|calloc|free/,
-        /pointer|array|struct|enum|typedef/,
+        /\bgcc\b|printf|scanf|malloc|calloc|free|sizeof|null/,
+        /pointer|dereference|address|array|struct|enum|typedef/,
         /\bfor\b|\bwhile\b|\bdo\b|\bif\b|\bswitch\b/,
-        /function|segmentation fault|stack|heap|#include|main\s*\(/
+        /function|segmentation fault|stack|heap|#include|main\s*\(/,
+        /\bline\b.*\bcode\b/,
+        /\w+\s*\*+\s*\w+/,
+        /->/
     ];
     return cPatterns.some(re => re.test(q));
 }
 
-function generateLocalModeChatAnswer(question, language = 'en') {
+function looksLikePointerQuestion(text) {
+    const raw = String(text || '');
+    const q = raw.toLowerCase();
+    return /pointer|dereference|address|indirection|aliasing|malloc|calloc|free|null pointer/.test(q)
+        || /\w+\s*\*+\s*\w+/.test(raw)
+        || /=\s*&\s*[a-zA-Z_]\w*/.test(raw)
+        || /\*\s*[a-zA-Z_]\w+\s*=/.test(raw)
+        || /->/.test(raw);
+}
+
+function extractCodeLines(text) {
+    return String(text || '')
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => {
+            if (!line) return false;
+            if (/^(user|assistant):/i.test(line)) return false;
+            return /[;{}#]/.test(line)
+                || /\b(?:return|if|else|while|for|printf|scanf|malloc|calloc|free|sizeof)\b/.test(line)
+                || /\b(?:int|char|float|double|long|short|void|struct)\b/.test(line);
+        })
+        .slice(0, 6);
+}
+
+function looksLikeLineExplanationRequest(text) {
+    const q = String(text || '').toLowerCase();
+    const codeLines = extractCodeLines(text);
+    return /ask line ai|what does this line|what does line|explain this line|explain that line|selected c lines|selected line|line by line|which line/.test(q)
+        || (codeLines.length > 0 && /\bline\b/.test(q))
+        || (codeLines.length >= 2 && /\b(explain|understand|debug|why|how)\b/.test(q));
+}
+
+function explainPointerBehaviorForLine(line) {
+    const trimmed = String(line || '').trim();
+    if (!trimmed) {
+        return 'Track whether this step is reading an address, reading a value through a pointer, or writing into pointed memory.';
+    }
+
+    const pointerInitMatch = trimmed.match(/\*\s*([a-zA-Z_]\w*)\s*=\s*&\s*([a-zA-Z_]\w*)/);
+    if (pointerInitMatch) {
+        return `This declares pointer \`${pointerInitMatch[1]}\` and stores the address of \`${pointerInitMatch[2]}\` in it. The pointer now points at that variable's memory.`;
+    }
+
+    const plainPointerDeclMatch = trimmed.match(/^(?:const\s+)?(?:unsigned\s+|signed\s+)?(?:int|char|float|double|long|short|void|size_t|FILE|struct\s+\w+)\s*\*+\s*([a-zA-Z_]\w*)\s*;?$/);
+    if (plainPointerDeclMatch) {
+        return `This declares pointer \`${plainPointerDeclMatch[1]}\`. It can hold an address, but it is not safe to dereference until you assign a valid target.`;
+    }
+
+    if (/malloc|calloc/.test(trimmed)) {
+        return 'This stores a heap address in a pointer. The pointer variable is local, but the allocated memory block lives on the heap until you free it.';
+    }
+
+    if (/\bfree\s*\(/.test(trimmed)) {
+        return 'This releases the heap block the pointer refers to. After `free`, do not dereference that pointer unless it is assigned a new valid address.';
+    }
+
+    const writeThroughMatch = trimmed.match(/^\*\s*([a-zA-Z_]\w*)\s*=\s*(.+);?$/);
+    if (writeThroughMatch) {
+        return `The \`*\` dereferences \`${writeThroughMatch[1]}\` and writes into the memory at that address. This changes the original variable or heap cell, not the pointer itself.`;
+    }
+
+    const readThroughMatch = trimmed.match(/=\s*\*\s*([a-zA-Z_]\w*)/);
+    if (readThroughMatch) {
+        return `The \`*\` reads the value stored at the address inside \`${readThroughMatch[1]}\`. The result is the pointed value, not the address.`;
+    }
+
+    const addressMatch = trimmed.match(/=\s*&\s*([a-zA-Z_]\w*)/);
+    if (addressMatch) {
+        return `The \`&\` operator takes the address of \`${addressMatch[1]}\`. The left side receives that address instead of copying the variable's value.`;
+    }
+
+    if (/printf\s*\(/.test(trimmed) && /\*/.test(trimmed)) {
+        return 'This reads through a pointer for output. It observes the current pointed value but does not modify memory.';
+    }
+
+    if (/\[[^\]]+\]/.test(trimmed)) {
+        return 'Array indexing is pointer-based under the hood: this line accesses memory relative to a base address.';
+    }
+
+    return 'Read this in pointer terms: identify which name stores an address, whether `&` creates that address, and whether `*` reads or writes the value at that address.';
+}
+
+function generateLocalLineExplanation(question, language = 'en', context = '') {
+    const source = [context, question].filter(Boolean).join('\n');
+    const codeLines = extractCodeLines(source);
+    if (codeLines.length === 0) {
+        return [
+            'Pointer-focused explanation:',
+            'Share the exact C line or selected code block.',
+            'I will explain which variable stores an address, what `&` means, what `*` means, and what memory changes.'
+        ].join('\n');
+    }
+
+    const lines = ['Pointer-focused code explanation:'];
+    codeLines.forEach((line, idx) => {
+        lines.push(`Line ${idx + 1}: ${line}`);
+        lines.push(explainPointerBehaviorForLine(line));
+    });
+    lines.push('Quick rule: `ptr` is an address, `*ptr` is the value at that address, and `&var` is the address of that variable.');
+    return lines.join('\n');
+}
+
+function generateLocalModeChatAnswer(question, language = 'en', context = '') {
     const lang = normalizePreferredLanguage(language);
     const q = String(question || '').trim();
     const lower = q.toLowerCase();
-    if (!isCRelatedQuestion(q)) {
+    const combined = [context, q].filter(Boolean).join('\n');
+    if (!isCRelatedQuestion(combined)) {
         return localizeText(lang, 'c_only');
     }
-    if (/pointer/.test(lower)) {
+    if (looksLikeLineExplanationRequest(combined)) {
+        return generateLocalLineExplanation(q, lang, context);
+    }
+    if (looksLikePointerQuestion(combined)) {
         return [
             localizeText(lang, 'local_pointer_title'),
             localizeText(lang, 'local_pointer_example'),
-            'int x = 10;',
-            'int *p = &x;',
-            '*p = 42; // now x is 42',
+            'int x = 10;        // x stores the value 10',
+            'int *p = &x;       // p stores the address of x',
+            '*p = 42;           // write 42 into the memory that p points to',
+            'printf("%d %d\\n", x, *p); // both print 42',
+            'Rule: p is an address, *p is the value at that address, &x is the address of x.',
             localizeText(lang, 'local_pointer_tip')
         ].join('\n');
     }
@@ -1043,6 +1133,24 @@ async function generateWithBedrock({ systemPrompt, userPrompt, maxTokens = 1200,
     return text || localizeText('en', 'no_response_generated');
 }
 
+function shouldUseLocalFallbackForBedrockError(err) {
+    const details = [
+        err?.name,
+        err?.code,
+        err?.message,
+        err?.$metadata?.httpStatusCode
+    ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+
+    return details.includes('model use case details have not been submitted')
+        || details.includes('anthropic use case details form')
+        || details.includes('accessdeniedexception')
+        || details.includes('access denied')
+        || details.includes('not authorized to invoke model');
+}
+
 // ── AUTH ROUTES (no auth required) ────────────────────────────────────────────
 
 app.get('/health', (_req, res) => {
@@ -1060,6 +1168,7 @@ app.get('/api/auth/config', (req, res) => {
     }
 
     res.json({
+        demoMode: false,
         region: process.env.AWS_REGION,
         userPoolId: process.env.COGNITO_USER_POOL_ID,
         clientId: process.env.COGNITO_CLIENT_ID,
@@ -1138,37 +1247,47 @@ app.post('/api/auth/refresh', async (req, res) => {
 
 // ── PROTECTED API ROUTES (requireAuth middleware validates JWT) ────────────────
 
-app.post('/api/chat', requireAuthMaybeDemo, async (req, res) => {
+app.post('/api/chat', requireAuth, async (req, res) => {
     try {
         const profile = profiles.get(req.user.sub) || await ensureProfileForUser(req.user);
         const preferredLanguage = normalizePreferredLanguage(
             req.body?.preferredLanguage || profile?.preferredLanguage
         );
         const question = String(req.body?.question || '').trim();
-        if (!question) {
-            return res.status(400).json({ answer: localizeText(preferredLanguage, 'question_required') });
-        }
-        if (!isCRelatedQuestion(question)) {
-            return res.json({ answer: localizeText(preferredLanguage, 'c_only') });
-        }
-
-        if (!bedrockEnabled) {
-            return res.json({ answer: generateLocalModeChatAnswer(question, preferredLanguage) });
-        }
-
         const recentMessages = Array.isArray(req.body?.messages)
             ? req.body.messages
                 .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
                 .slice(-6)
             : [];
+        const recentContextText = recentMessages
+            .map(m => m.content.trim())
+            .filter(Boolean)
+            .join('\n');
         const shortContext = recentMessages
             .map(m => `${m.role}: ${m.content}`.trim())
             .join('\n');
+        const combinedContext = [recentContextText, question].filter(Boolean).join('\n');
+        if (!question) {
+            return res.status(400).json({ answer: localizeText(preferredLanguage, 'question_required') });
+        }
+        if (!isCRelatedQuestion(combinedContext)) {
+            return res.json({ answer: localizeText(preferredLanguage, 'c_only') });
+        }
+
+        if (!bedrockEnabled) {
+            return res.json({ answer: generateLocalModeChatAnswer(question, preferredLanguage, recentContextText) });
+        }
 
         const asksFor7DayPlan = /7\s*day|seven\s*day/i.test(question) && /plan/i.test(question) && /c\b/i.test(question.toLowerCase());
+        const wantsLineExplanation = looksLikeLineExplanationRequest(combinedContext);
+        const wantsPointerHelp = looksLikePointerQuestion(combinedContext);
         const systemPrompt = asksFor7DayPlan
             ? `You are a strict C learning coach. Return a detailed 7-day C learning plan with Day 1..Day 7 sections, daily goals, topics, exercises, and one mini-project by Day 7. Use clear bullet points and practical steps. ${languageInstruction(preferredLanguage)}`
-            : `You are a practical C programming mentor. Give concise, accurate, structured guidance with examples. ${languageInstruction(preferredLanguage)}`;
+            : wantsLineExplanation
+                ? `You are a practical C programming mentor. The user is asking about a specific C line or code block. Explain it line by line, with strong focus on pointers, addresses, dereferencing, aliasing, and what changes in memory. Be concrete and beginner-friendly. ${languageInstruction(preferredLanguage)}`
+                : wantsPointerHelp
+                    ? `You are a practical C programming mentor focused on pointers and memory. Explain addresses, dereferencing, stack vs heap effects, and what each code line changes. Use compact code examples when useful. ${languageInstruction(preferredLanguage)}`
+                    : `You are a practical C programming mentor. Give concise, accurate, structured guidance with examples. ${languageInstruction(preferredLanguage)}`;
 
         const basePrompt = asksFor7DayPlan
             ? `Create a complete 7-day C learning plan. Include:
@@ -1178,17 +1297,30 @@ app.post('/api/chat', requireAuthMaybeDemo, async (req, res) => {
 4) checkpoints,
 5) expected outcomes.
 User request: ${question}`
-            : question;
+            : wantsLineExplanation
+                ? `Explain this C code line by line. For each important line, state what value it holds, whether it stores an address, what \`&\` means there, what \`*\` means there, and what memory changes.\n\nUser request:\n${question}`
+                : wantsPointerHelp
+                    ? `Explain this as a C pointers and memory question. Use code-centered explanations and be explicit about addresses, dereferencing, and writes through pointers.\n\nUser request:\n${question}`
+                    : question;
         const userPrompt = shortContext
             ? `Recent conversation (last turns):\n${shortContext}\n\nCurrent user question:\n${basePrompt}`
             : basePrompt;
 
-        const answer = await generateWithBedrock({
-            systemPrompt,
-            userPrompt,
-            maxTokens: asksFor7DayPlan ? 2200 : 1000,
-            temperature: asksFor7DayPlan ? 0.4 : 0.3
-        });
+        let answer;
+        try {
+            answer = await generateWithBedrock({
+                systemPrompt,
+                userPrompt,
+                maxTokens: asksFor7DayPlan ? 2200 : 1000,
+                temperature: asksFor7DayPlan ? 0.4 : 0.3
+            });
+        } catch (err) {
+            if (shouldUseLocalFallbackForBedrockError(err)) {
+                console.warn('[AI] Bedrock chat unavailable, using local fallback:', err.message);
+                return res.json({ answer: generateLocalModeChatAnswer(question, preferredLanguage, recentContextText) });
+            }
+            throw err;
+        }
 
         res.json({ answer });
     } catch (err) {
@@ -1198,7 +1330,7 @@ User request: ${question}`
     }
 });
 
-app.post('/api/explain-logic', requireAuthMaybeDemo, async (req, res) => {
+app.post('/api/explain-logic', requireAuth, async (req, res) => {
     try {
         const profile = profiles.get(req.user.sub) || await ensureProfileForUser(req.user);
         const preferredLanguage = normalizePreferredLanguage(
@@ -1218,12 +1350,30 @@ app.post('/api/explain-logic', requireAuthMaybeDemo, async (req, res) => {
             });
         }
 
-        const explanation = await generateWithBedrock({
-            systemPrompt: `You are a C debugger tutor. Explain code execution at a specific step clearly and concretely for beginners. Mention variable values and what changes next. ${languageInstruction(preferredLanguage)}`,
-            userPrompt: `Code:\n${code || ''}\n\nCurrent step index: ${idx}\nStep payload: ${JSON.stringify(step)}\n\nExplain what this step means and what to focus on.`,
-            maxTokens: 900,
-            temperature: 0.2
-        });
+        const pointerFocused = looksLikePointerQuestion(code || '') || Boolean(step?.addr);
+        let explanation;
+        try {
+            explanation = await generateWithBedrock({
+                systemPrompt: pointerFocused
+                    ? `You are a C debugger tutor. Explain this execution step clearly for beginners with a pointer-first view. State which variable holds an address, whether the step dereferences it, and exactly what memory location or value changes next. ${languageInstruction(preferredLanguage)}`
+                    : `You are a C debugger tutor. Explain code execution at a specific step clearly and concretely for beginners. Mention variable values and what changes next. ${languageInstruction(preferredLanguage)}`,
+                userPrompt: `Code:\n${code || ''}\n\nCurrent step index: ${idx}\nStep payload: ${JSON.stringify(step)}\n\nExplain what this step means and what to focus on.`,
+                maxTokens: 900,
+                temperature: 0.2
+            });
+        } catch (err) {
+            if (shouldUseLocalFallbackForBedrockError(err)) {
+                console.warn('[AI] Bedrock step explanation unavailable, using local fallback:', err.message);
+                return res.json({
+                    explanation: generateLocalStepExplanation({
+                        language: preferredLanguage,
+                        step,
+                        currentStepIndex: idx
+                    })
+                });
+            }
+            throw err;
+        }
 
         res.json({ explanation });
     } catch (err) {
@@ -1233,13 +1383,13 @@ app.post('/api/explain-logic', requireAuthMaybeDemo, async (req, res) => {
     }
 });
 
-app.get('/api/profile', requireAuthMaybeDemo, async (req, res) => {
+app.get('/api/profile', requireAuth, async (req, res) => {
     await ensureProfileForUser(req.user);
     const profile = profiles.get(req.user.sub);
     res.json(serializeProfile(profile || ensureProfile(req.user)));
 });
 
-app.post('/api/profile/theme', requireAuthMaybeDemo, async (req, res) => {
+app.post('/api/profile/theme', requireAuth, async (req, res) => {
     await ensureProfileForUser(req.user);
     const theme = req.body?.theme === 'light' ? 'light' : 'dark';
     const profile = profiles.get(req.user.sub) || await ensureProfileForUser(req.user);
@@ -1248,7 +1398,7 @@ app.post('/api/profile/theme', requireAuthMaybeDemo, async (req, res) => {
     res.json(serializeProfile(profile));
 });
 
-app.post('/api/profile/language', requireAuthMaybeDemo, async (req, res) => {
+app.post('/api/profile/language', requireAuth, async (req, res) => {
     await ensureProfileForUser(req.user);
     const preferredLanguage = normalizePreferredLanguage(req.body?.preferredLanguage);
     const profile = profiles.get(req.user.sub) || await ensureProfileForUser(req.user);
@@ -1258,7 +1408,7 @@ app.post('/api/profile/language', requireAuthMaybeDemo, async (req, res) => {
     res.json(serializeProfile(profile));
 });
 
-app.post('/api/profile/topic-complete', requireAuthMaybeDemo, async (req, res) => {
+app.post('/api/profile/topic-complete', requireAuth, async (req, res) => {
     await ensureProfileForUser(req.user);
     const topicId = String(req.body?.topicId || '').trim();
     const profile = profiles.get(req.user.sub) || await ensureProfileForUser(req.user);
@@ -1275,7 +1425,7 @@ app.post('/api/profile/topic-complete', requireAuthMaybeDemo, async (req, res) =
  * Returns the stored execution history for the logged-in user's last run.
  * Useful for resuming after a page refresh.
  */
-app.get('/api/session/history', requireAuthMaybeDemo, async (req, res) => {
+app.get('/api/session/history', requireAuth, async (req, res) => {
     const userId = req.user.sub;
     const inMemoryHistory = sessionManager.getHistory(userId);
     if (Array.isArray(inMemoryHistory) && inMemoryHistory.length > 0) {
@@ -1286,13 +1436,13 @@ app.get('/api/session/history', requireAuthMaybeDemo, async (req, res) => {
     return res.json({ history: durableHistory });
 });
 
-app.get('/api/chat/sessions', requireAuthMaybeDemo, async (req, res) => {
+app.get('/api/chat/sessions', requireAuth, async (req, res) => {
     await ensureProfileForUser(req.user);
     const profile = profiles.get(req.user.sub) || await ensureProfileForUser(req.user);
     return res.json({ sessions: sanitizeChatSessions(profile.chatSessions) });
 });
 
-app.post('/api/chat/sessions', requireAuthMaybeDemo, async (req, res) => {
+app.post('/api/chat/sessions', requireAuth, async (req, res) => {
     await ensureProfileForUser(req.user);
     const profile = profiles.get(req.user.sub) || await ensureProfileForUser(req.user);
     profile.chatSessions = sanitizeChatSessions(req.body?.sessions);
@@ -1300,7 +1450,7 @@ app.post('/api/chat/sessions', requireAuthMaybeDemo, async (req, res) => {
     return res.json({ ok: true, sessions: profile.chatSessions });
 });
 
-app.post('/api/run', requireAuthMaybeDemo, async (req, res) => {
+app.post('/api/run', requireAuth, async (req, res) => {
     await ensureProfileForUser(req.user);
     const { sub: userId, email, name } = req.user;
     const requestedSocketId = req.body?.socketId;
@@ -1322,7 +1472,7 @@ app.post('/api/run', requireAuthMaybeDemo, async (req, res) => {
  * GET /api/admin/stats  (restrict to admin group in production)
  * Returns live session stats for monitoring.
  */
-app.get('/api/admin/stats', requireAuthMaybeDemo, (req, res) => {
+app.get('/api/admin/stats', requireAuth, (req, res) => {
     // In production, check req.user['cognito:groups'] includes 'admins'
     res.json(sessionManager.getStats());
 });
@@ -1330,7 +1480,7 @@ app.get('/api/admin/stats', requireAuthMaybeDemo, (req, res) => {
 // ── SOCKET.IO — per-user isolated execution ────────────────────────────────────
 
 // All socket connections must provide a valid Cognito id_token
-io.use(requireAuthSocketMaybeDemo);
+io.use(requireAuthSocket);
 
 io.on('connection', async (socket) => {
     const { sub: userId, email, name } = socket.user;

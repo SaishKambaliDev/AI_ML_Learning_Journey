@@ -13,6 +13,20 @@
 
 const jwksClient = require('jwks-rsa');
 const jwt = require('jsonwebtoken');
+const DEMO_MODE = process.env.DEMO_MODE === 'true';
+const DEMO_USER = (() => {
+    const user = {
+        id: 'demo-user',
+        email: 'demo@memflow.ai',
+        name: 'Demo User'
+    };
+    // Preserve existing route compatibility without changing the visible demo-user shape.
+    Object.defineProperty(user, 'sub', {
+        value: user.id,
+        enumerable: false
+    });
+    return Object.freeze(user);
+})();
 
 // JWKS client — fetches and caches Cognito's public signing keys
 const client = jwksClient({
@@ -61,6 +75,10 @@ function verifyToken(token) {
  * Usage: app.use('/api', requireAuth, router)
  */
 async function requireAuth(req, res, next) {
+    if (DEMO_MODE) {
+        req.user = DEMO_USER;
+        return next();
+    }
     const authHeader = req.headers['authorization'];
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
         return res.status(401).json({ error: 'Missing or invalid Authorization header' });
@@ -80,6 +98,10 @@ async function requireAuth(req, res, next) {
  * Client must send: socket = io({ auth: { token: '<id_token>' } })
  */
 async function requireAuthSocket(socket, next) {
+    if (DEMO_MODE) {
+        socket.user = DEMO_USER;
+        return next();
+    }
     const token = socket.handshake.auth?.token;
     if (!token) {
         return next(new Error('AUTH_REQUIRED: No token provided in socket handshake'));
@@ -92,4 +114,4 @@ async function requireAuthSocket(socket, next) {
     }
 }
 
-module.exports = { requireAuth, requireAuthSocket, verifyToken };
+module.exports = { requireAuth, requireAuthSocket, verifyToken, DEMO_USER };

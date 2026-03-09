@@ -1641,6 +1641,15 @@ let monacoEditorPromise = null;
 let leaderLinePromise = null;
 let pendingEditorValue = DEFAULT_EDITOR_CODE;
 
+async function getAuthConfig() {
+  if (!authConfigPromise) {
+    authConfigPromise = fetch('/api/auth/config')
+      .then(res => res.ok ? res.json() : null)
+      .catch(() => null);
+  }
+  return authConfigPromise;
+}
+
 function applyTheme(theme) {
   currentTheme = theme === 'light' ? 'light' : 'dark';
   document.body.classList.toggle('light', currentTheme === 'light');
@@ -1909,21 +1918,19 @@ async function markTopicComplete(topicId) {
 }
 
 async function getToken() {
+  const cfg = await getAuthConfig();
+  if (cfg?.demoMode === true) {
+    localStorage.setItem('idToken', 'demo-token');
+    localStorage.setItem('memflowai_id_token', 'demo-token');
+    localStorage.removeItem('memflowai_refresh_token');
+    localStorage.removeItem('memflowai_token_expiry');
+    return 'demo-token';
+  }
+
   const idToken = localStorage.getItem('memflowai_id_token') || localStorage.getItem('idToken');
   const expiry = parseInt(localStorage.getItem('memflowai_token_expiry') || '0', 10);
   const refreshToken = localStorage.getItem('memflowai_refresh_token');
   if (!idToken) {
-    if (!authConfigPromise) {
-      authConfigPromise = fetch('/api/auth/config')
-        .then(res => res.ok ? res.json() : null)
-        .catch(() => null);
-    }
-    const cfg = await authConfigPromise;
-    if (cfg?.demoMode === true) {
-      localStorage.setItem('idToken', 'demo-token');
-      localStorage.setItem('memflowai_id_token', 'demo-token');
-      return 'demo-token';
-    }
     return null;
   }
 
@@ -1968,6 +1975,7 @@ async function authFetch(u, o={}) {
 }
 
 function logout() {
+  localStorage.removeItem('idToken');
   localStorage.removeItem('memflowai_id_token');
   localStorage.removeItem('memflowai_refresh_token');
   localStorage.removeItem('memflowai_token_expiry');
@@ -2366,6 +2374,12 @@ function setProgStatus(txt, col) {
   if (el) { el.textContent = txt; el.style.color = col || 'var(--t3)'; }
 }
 
+function nextAnimationFrame() {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+}
+
 function waitForSocketReady(timeoutMs = 4000) {
   if (socket?.connected) return Promise.resolve(true);
   return new Promise((resolve) => {
@@ -2559,6 +2573,10 @@ function handleOut(data) {
 ───────────────────────────────────────────── */
 async function runCode() {
   try {
+    if (!rightOpen) {
+      toggleRight();
+      await nextAnimationFrame();
+    }
     const term = ensureTerminalLayout();
     ensureTerminalVisible();
     if (runActive) {
@@ -2567,7 +2585,6 @@ async function runCode() {
       showToast(message, '#ffb800', 1800);
       return;
     }
-    if (!rightOpen) toggleRight();
     history_ = []; step = -1; obuf = '';
     runVisibleTerminalOutput = false;
     runCompletionHandled = false;
@@ -3045,9 +3062,20 @@ function appendTerminalLine(text, lineContext = outputLineContext) {
   const raw = String(text || '').trim();
   if (!final || !raw) return;
   if (isTerminalNoiseLine(raw)) return;
+  ensureTerminalVisible();
   runVisibleTerminalOutput = true;
   const badge = Number.isInteger(lineContext) ? `<span style="color:#6f8f9f">[L${lineContext}]</span> ` : '';
   final.innerHTML += badge + esc(raw) + '<br>';
+  final.scrollTop = final.scrollHeight;
+}
+
+function appendTerminalInputEcho(text) {
+  const { final } = ensureTerminalLayout();
+  const raw = String(text || '').trim();
+  if (!final || !raw) return;
+  ensureTerminalVisible();
+  runVisibleTerminalOutput = true;
+  final.innerHTML += `<span style="color:var(--amber)">&gt; ${esc(raw)}</span><br>`;
   final.scrollTop = final.scrollHeight;
 }
 
@@ -3372,9 +3400,7 @@ function submitScanf() {
   const val = input.value;
   if (!val.trim()) return;
   setProgStatus(t('compiler.running'), 'var(--amber)');
-  const terminalEl = document.getElementById('terminal');
-  terminalEl.innerHTML += '<span style="color:var(--amber)">&gt; ' + esc(val) + '</span><br>';
-  terminalEl.scrollTop = terminalEl.scrollHeight;
+  appendTerminalInputEcho(val);
   socket.emit('sendInput', { value: val });
   input.value = '';
   input.focus();

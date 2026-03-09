@@ -90,8 +90,10 @@
         if (cfg.demoMode === true) {
             localStorage.setItem('idToken', 'demo-token');
             localStorage.setItem('memflowai_id_token', 'demo-token');
+            localStorage.removeItem('memflowai_refresh_token');
+            localStorage.removeItem('memflowai_token_expiry');
             status.textContent = 'Demo mode enabled. Redirecting...';
-            location.href = nextPath;
+            location.replace(nextPath);
             return;
         }
 
