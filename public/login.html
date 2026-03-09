@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>MemFlow AI — Sign In</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: #0d0d0d;
+            color: white;
+            font-family: 'Segoe UI', sans-serif;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .card {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 12px;
+            padding: 48px 40px;
+            width: 380px;
+            text-align: center;
+        }
+        .logo { color: #00ffff; font-size: 2em; font-weight: bold; letter-spacing: 2px; margin-bottom: 8px; }
+        .tagline { color: #666; font-size: 0.9em; margin-bottom: 40px; }
+        .btn-login {
+            display: block;
+            width: 100%;
+            padding: 14px;
+            background: #0e639c;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1em;
+            font-weight: bold;
+            cursor: pointer;
+            text-decoration: none;
+            transition: background 0.2s;
+            margin-bottom: 12px;
+        }
+        .btn-login:hover { background: #1177bb; }
+        .btn-signup {
+            display: block;
+            width: 100%;
+            padding: 14px;
+            background: transparent;
+            color: #00ffff;
+            border: 1px solid #00ffff;
+            border-radius: 8px;
+            font-size: 1em;
+            font-weight: bold;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all 0.2s;
+        }
+        .btn-signup:hover { background: #00ffff22; }
+        .divider { color: #444; margin: 20px 0; font-size: 0.85em; }
+        .status { margin-top: 20px; color: #888; font-size: 0.85em; min-height: 20px; }
+        .error { color: #ff4444; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="logo">MemFlow AI</div>
+    <div class="tagline">AI-Powered C Code Visualizer</div>
+
+    <a id="btn-login" class="btn-login" href="#">Sign In</a>
+    <div class="divider">— or —</div>
+    <a id="btn-signup" class="btn-signup" href="#">Create Account</a>
+
+    <div class="status" id="status">Loading configuration...</div>
+</div>
+
+<script>
+(async () => {
+    const status = document.getElementById('status');
+    const queryParams = new URLSearchParams(window.location.search);
+    const resolveSafeNextPath = (value) => {
+        const next = String(value || '').trim();
+        if (!next.startsWith('/') || next.startsWith('//')) return '/';
+        return next;
+    };
+    const nextPath = resolveSafeNextPath(queryParams.get('next'));
+
+    try {
+        // Fetch Cognito config from the server (keeps client_id out of hardcoded HTML)
+        const res = await fetch('/api/auth/config');
+        const cfg = await res.json();
+
+        if (cfg.demoMode === true) {
+            localStorage.setItem('idToken', 'demo-token');
+            localStorage.setItem('memflowai_id_token', 'demo-token');
+            status.textContent = 'Demo mode enabled. Redirecting...';
+            location.href = nextPath;
+            return;
+        }
+
+        const base = `https://${cfg.domain}/oauth2/authorize`;
+        const authParams = new URLSearchParams({
+            response_type: 'code',
+            client_id: cfg.clientId,
+            redirect_uri: cfg.redirectUri,
+            scope: 'openid email profile',
+            state: JSON.stringify({ next: nextPath })
+        });
+
+        document.getElementById('btn-login').href = `${base}?${authParams}`;
+        document.getElementById('btn-signup').href = `${base}?${authParams}&screen_hint=signup`;
+        status.textContent = 'Ready';
+
+    } catch (e) {
+        status.className = 'status error';
+        status.textContent = 'Failed to load config. Is the server running?';
+    }
+})();
+</script>
+</body>
+</html>

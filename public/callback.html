@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>MemFlow AI — Signing In...</title>
+    <style>
+        body { background: #0d0d0d; color: #00ffff; font-family: 'Segoe UI', sans-serif;
+               display: flex; align-items: center; justify-content: center; height: 100vh; }
+        .msg { text-align: center; }
+        .spinner { font-size: 2em; animation: spin 1s linear infinite; display: inline-block; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .error { color: #ff4444; }
+    </style>
+</head>
+<body>
+<div class="msg">
+    <div class="spinner">⟳</div>
+    <div id="msg" style="margin-top:16px">Completing sign in...</div>
+</div>
+<script>
+(async () => {
+    const msgEl = document.getElementById('msg');
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    const error = params.get('error');
+    const resolveSafeNextPath = (value) => {
+        const next = String(value || '').trim();
+        if (!next.startsWith('/') || next.startsWith('//')) return '/';
+        return next;
+    };
+    const parseNextFromState = (value) => {
+        if (!value) return '/';
+        try {
+            const parsed = JSON.parse(value);
+            return resolveSafeNextPath(parsed?.next);
+        } catch (_) {
+            return resolveSafeNextPath(value);
+        }
+    };
+    const nextPath = parseNextFromState(params.get('state'));
+
+    if (error) {
+        msgEl.className = 'error';
+        msgEl.textContent = `Sign in failed: ${error}`;
+        return;
+    }
+
+    if (!code) {
+        msgEl.className = 'error';
+        msgEl.textContent = 'No authorization code received.';
+        return;
+    }
+
+    try {
+        // Exchange the auth code for tokens (server does this to keep client_secret safe)
+        const res = await fetch('/api/auth/callback', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code })
+        });
+
+        if (!res.ok) throw new Error('Token exchange failed');
+
+        const { idToken, refreshToken, expiresIn } = await res.json();
+
+        // Store tokens in localStorage
+        // idToken is a JWT — used to authenticate every API call and socket connection
+        localStorage.setItem('memflowai_id_token', idToken);
+        localStorage.setItem('memflowai_refresh_token', refreshToken);
+        // Store expiry time so we know when to refresh
+        localStorage.setItem('memflowai_token_expiry', Date.now() + (expiresIn * 1000));
+
+        msgEl.textContent = '✅ Signed in! Redirecting...';
+
+        // Redirect to the main app
+        window.location.href = nextPath;
+
+    } catch (e) {
+        msgEl.className = 'error';
+        msgEl.textContent = 'Authentication failed: ' + e.message;
+    }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,39 @@
+name: Feature request
+description: Suggest a user-facing improvement, platform enhancement, or contributor experience improvement.
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      placeholder: It is hard for beginners to understand pointer updates across steps...
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      placeholder: Add a diff view that highlights which variable changed on each step...
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      placeholder: We could also show per-step badges in the timeline...
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Frontend UX
+        - Lesson content
+        - AI experience
+        - Compiler or runner
+        - Auth or profiles
+        - Infrastructure
+        - Documentation
+    validations:
+      required: true

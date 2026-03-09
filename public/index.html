@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script>
+(() => {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const queryLang = String(params.get('lang') || '').toLowerCase();
+    const storedLang = String(localStorage.getItem('memflow_ui_language') || 'en').toLowerCase();
+    const supported = ['hi', 'bn', 'te', 'ta', 'mr'];
+    const rawPathname = String(window.location.pathname || '/').trim() || '/';
+    const pathname = rawPathname === '/'
+      ? '/'
+      : (rawPathname.replace(/\/+$/, '') || '/');
+    document.documentElement.dataset.routeMode = pathname === '/visualize'
+      ? 'visualize'
+      : (pathname === '/compiler' ? 'compiler' : 'default');
+    const resolvedLang = supported.includes(queryLang)
+      ? queryLang
+      : (supported.includes(storedLang) ? storedLang : 'en');
+    if (resolvedLang === 'en') {
+      params.delete('lang');
+    } else {
+      params.set('lang', resolvedLang);
+    }
+    const canonicalQuery = params.toString();
+    const canonicalUrl = `${pathname}${canonicalQuery ? `?${canonicalQuery}` : ''}${window.location.hash || ''}`;
+    const currentUrl = `${pathname}${window.location.search}${window.location.hash}`;
+    if (currentUrl !== canonicalUrl) {
+      window.history.replaceState(null, '', canonicalUrl);
+    }
+  } catch (_) {}
+})();
+</script>
+<title>MemFlow AI — Learn C Programming</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/index.css?v=20260309l">
+</head>
+<body>
+
+<!-- TOPBAR -->
+<div id="topbar">
+  <button class="hbg" id="hbtn" onclick="mobLeft()" aria-label="Menu">
+    <span></span><span></span><span></span>
+  </button>
+  <div class="logo" onclick="goHome(document.getElementById('nav-home'))" style="cursor:pointer" title="Go to Home" id="logo-home"><div class="logo-pulse"></div>MemFlow<span style="opacity:.35"> AI</span></div>
+  <div id="topbar-nav">
+    <div class="nav-pills">
+      <button id="nav-home" class="npill on" data-route="true" onclick="goHome(this)">Home</button>
+      <button id="nav-learn" class="npill" data-route="true" onclick="goLearn(this)">Learn</button>
+      <button id="nav-topics" class="npill" onclick="toggleTopicsFromNav()">Topics</button>
+      <button id="nav-compiler" class="npill" data-route="true" onclick="goCompiler(this)">Compiler</button>
+      <button id="nav-visualize" class="npill" data-route="true" onclick="goVisualize(this)">Visualize</button>
+      <button id="nav-chat" class="npill" onclick="openChatHub()">Chat</button>
+    </div>
+  </div>
+  <div id="topbar-actions">
+    <button class="topbar-action-btn" id="header-download-btn" type="button" onclick="downloadCurrentCode()">
+      <span class="topbar-action-icon">⬇</span>
+      <span id="header-download-label">Download</span>
+    </button>
+    <div id="lang-wrap">
+      <button class="topbar-action-btn" id="header-language-btn" type="button" onclick="toggleQuickLanguageMenu()">
+        <span class="topbar-action-icon">🌐</span>
+        <span id="header-language-current">English</span>
+      </button>
+      <div id="quick-language-menu"></div>
+    </div>
+  </div>
+  <button id="mob-try" onclick="mobRight()">⚡ Try It</button>
+  <div id="account-wrap">
+    <button id="account-btn" onclick="toggleAccountMenu()" title="Account">👤</button>
+    <div id="account-menu">
+      <div class="acc-name" id="acc-name">User</div>
+      <div class="acc-email" id="acc-email">user@example.com</div>
+      <div class="acc-sep"></div>
+      <div class="acc-row">
+        <label for="profile-theme" id="profile-theme-label">Theme</label>
+        <select id="profile-theme" onchange="onProfileThemeChange(this.value)">
+          <option value="dark">Dark</option>
+          <option value="light">Light</option>
+        </select>
+      </div>
+      <div class="acc-row">
+        <label for="profile-language" id="profile-language-label">Language</label>
+        <div class="acc-inline">
+          <select id="profile-language" onchange="onProfileLanguageSelectChange(this.value)">
+            <option value="en">English</option>
+            <option value="hi">हिन्दी</option>
+            <option value="bn">বাংলা</option>
+            <option value="te">తెలుగు</option>
+            <option value="ta">தமிழ்</option>
+            <option value="mr">मराठी</option>
+          </select>
+          <button id="profile-language-ok" type="button" onclick="applyProfileLanguageChange()" disabled>OK</button>
+        </div>
+      </div>
+      <div class="acc-progress">
+        <div class="acc-prog-label">
+          <span id="progress-label">Progress</span>
+          <span id="acc-prog-text">0%</span>
+        </div>
+        <div class="acc-progbar"><div class="acc-progfill" id="acc-prog-fill"></div></div>
+      </div>
+      <button id="btn-logout" onclick="logout()">Sign Out</button>
+    </div>
+  </div>
+</div>
+
+<!-- LAYOUT -->
+<div id="layout">
+
+  <!-- LEFT PANEL -->
+  <div id="lp" class="shut">
+    <div class="lp-head"><span class="hi">📚</span> <span id="topics-head-title">C Topics</span></div>
+    <input type="text" id="tsearch" placeholder="Search topics…" oninput="filterT(this.value)">
+    <div id="tlist"></div>
+  </div>
+
+  <!-- CENTER -->
+  <div id="center">
+    <!-- HOME -->
+    <div id="home">
+      <div id="home-particles"></div>
+      <div class="hero">
+        <h1 id="hero-title">Learn <em>C</em> step by step.</h1>
+        <p id="hero-subtitle">Write code, run it, and see memory updates clearly.</p>
+        <div class="hero-actions">
+          <button class="hero-btn pri" id="hero-start-btn" onclick="openRight()">Start Coding</button>
+          <button class="hero-btn sec" id="hero-topics-btn" onclick="goLearn(document.getElementById('nav-learn'))">Explore Topics</button>
+        </div>
+      </div>
+      <div class="sg-label" id="sg-label">Start Learning</div>
+      <div class="sgrid" id="sgrid"></div>
+    </div>
+
+    <!-- TOPIC PAGE -->
+    <div id="tpage"></div>
+
+    <!-- CHAT BAR -->
+    <div id="chatbar">
+      <div class="chatbar-row">
+        <div id="cbi">
+          <textarea id="cinput" rows="1" placeholder="Ask anything about C… or search a topic" onkeydown="ckd(event)" oninput="ar(this)"></textarea>
+          <button id="csend" onclick="sendChat()">↑</button>
+        </div>
+        <button id="copen" onclick="openChatPage()" title="Open Chat">💬</button>
+      </div>
+      <div class="chat-note" id="chat-note">MemFlow AI can make mistakes. Verify important details and test code before relying on results.</div>
+    </div>
+  </div>
+
+  <!-- RIGHT PANEL — split view: editor left, viz right -->
+  <div id="rp">
+
+    <!-- ══ TAB BAR + TOOLBAR — single unified strip ══ -->
+    <div class="rptabs">
+      <!-- RUN + nav controls always visible -->
+      <button class="tb tb-run" id="runbtn" onclick="runCode()" style="margin:5px 4px 5px 8px;padding:4px 10px">▶ RUN</button>
+      <div style="width:1px;height:16px;background:var(--border);flex-shrink:0"></div>
+      <button class="tb tb-nav" id="prevbtn" onclick="changeStep(-1)" disabled style="margin:5px 2px">◀ Prev</button>
+      <span id="slbl" style="font-family:var(--mono);font-size:.66rem;color:var(--t3);min-width:36px;text-align:center;flex-shrink:0">0/0</span>
+      <button class="tb tb-nav" id="nextbtn" onclick="changeStep(1)"  disabled style="margin:5px 2px">Next ▶</button>
+      <div style="width:1px;height:16px;background:var(--border);flex-shrink:0;margin:0 4px"></div>
+      <button class="tb tb-sel" id="selbtn" onclick="toggleLineSelectMode()" style="margin:5px 2px">✂ Select Lines</button>
+      <button class="tb tb-ai"  id="askbtn"  onclick="askAI()"        style="margin:5px 2px">🤖 Ask Line AI</button>
+      <button class="tb tb-mem" id="membtn" onclick="toggleMemoryView()" style="margin:5px 2px">🧠 Memory View</button>
+      <button class="rpxbtn" id="xbtn" onclick="closeRight()">✕ Close</button>
+    </div>
+    <div class="workbench-hint" id="workbench-hint">
+      <span><span class="hint-dot idle" id="hint-run-dot"></span><strong id="hint-run-state">Idle</strong></span>
+      <span><strong id="hint-selection">No lines selected</strong></span>
+      <span id="hint-run-shortcut">Run: <strong>Ctrl+Enter</strong></span>
+      <span id="hint-step-shortcut">Step: <strong>Alt+←/→</strong></span>
+      <span id="hint-askai-shortcut">Ask AI: <strong>Ctrl+Shift+A</strong></span>
+    </div>
+
+    <!-- ══ SPLIT BODY: editor | visualizer ══ -->
+    <div id="rp-body">
+
+      <!-- LEFT: Monaco + terminal + scanf -->
+      <div id="editor-pane">
+        <div id="editor"></div>
+        <div class="spltr" id="spltr"></div>
+        <div id="termwrap">
+          <div class="termhd">
+            <div class="tdot" style="background:#ff5f57"></div>
+            <div class="tdot" style="background:#febc2e"></div>
+            <div class="tdot" style="background:#28c840"></div>
+            <span style="margin-left:5px" id="output-label">Output</span>
+            <span id="prog-status" style="margin-left:auto;font-size:.58rem;color:var(--t3)"></span>
+            <button id="term-wide-arrow" title="Maximize output" onclick="toggleTerminalWide()">⤢ Maximize</button>
+          </div>
+          <div id="terminal">Ready…</div>
+        </div>
+        <!-- scanf dock — shows below terminal when scanf is hit -->
+        <div id="scanf-dock">
+          <div class="scanf-lbl" id="scanf-label">⌨  Program input</div>
+          <div class="scanf-row">
+            <input id="scanf-input" type="text" placeholder="Type value and press Enter…"
+                   autocomplete="off" spellcheck="false"
+                   onkeydown="if(event.key==='Enter')submitScanf()"/>
+            <button id="scanf-send" onclick="submitScanf()">Send ↵</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT: memory cards + AI -->
+      <div id="viz-pane">
+        <div class="viz-body">
+          <!-- Step banner -->
+          <div id="step-banner">
+            <span class="sb-line" id="sb-line">L–</span>
+            <span class="sb-code" id="sb-code">waiting…</span>
+          </div>
+          <!-- AI -->
+          <div class="aibub">
+            <div class="debug-ai-head">
+              <div class="aibtitle" id="debug-ai-title">🤖 Step AI Mentor</div>
+              <button class="debug-ai-expand" id="debug-ai-expand" onclick="openChatHub()">⤢ Expand</button>
+            </div>
+            <div id="debug-ai-text">Run code → step → click AI for explanation</div>
+            <div class="debug-ai-history compact-chat-window" id="debug-ai-history">
+              <div class="debug-ai-msg">No step explanations yet.</div>
+            </div>
+          </div>
+          <!-- Memory nav + cards -->
+          <div class="mem-hdr">
+            <div class="sklbl" id="memory-state-label">Memory State</div>
+            <div class="vnav">
+              <button id="vprev" onclick="changeStep(-1)" disabled>◀ Prev</button>
+              <span   id="vslbl">0/0</span>
+              <button id="vnext" onclick="changeStep(1)"  disabled>Next ▶</button>
+            </div>
+          </div>
+          <div id="viz-story"><div class="viz-empty">Run code to generate an execution timeline.</div></div>
+          <div id="memory-map"><div class="viz-empty">Memory map will appear here after execution starts.</div></div>
+          <div id="sklist"></div>
+        </div>
+      </div>
+
+    </div><!-- /#rp-body -->
+    <div class="mem-overlay" id="memory-overlay" onclick="if(event.target===this)toggleMemoryView(false)">
+      <div class="mem-overlay-shell">
+        <div class="mem-overlay-head">
+          <div class="mem-overlay-title" id="mem-overlay-title">Memory Grid View</div>
+          <div class="mem-overlay-nav">
+            <button id="mem-prev" onclick="changeStep(-1)" disabled>◀ Prev</button>
+            <span class="mem-overlay-step" id="mem-overlay-step">0/0</span>
+            <button id="mem-next" onclick="changeStep(1)" disabled>Next ▶</button>
+          </div>
+          <div class="mem-overlay-sub" id="mem-overlay-sub">Run code to populate memory slots.</div>
+          <button class="mem-overlay-close" id="mem-overlay-close" onclick="toggleMemoryView(false)">Close</button>
+        </div>
+        <div class="mem-overlay-grid" id="mem-overlay-grid">
+          <div class="viz-empty">Run code to generate memory grid visualization.</div>
+        </div>
+        <div class="mem-struct-wrap">
+          <div class="mem-struct-title" id="mem-struct-title">Memory Structure</div>
+          <div class="mem-struct-grid">
+            <div class="mem-struct-card">
+              <div class="mem-struct-head" id="mem-stack-head">Stack</div>
+              <table class="mem-struct-table">
+                <thead><tr><th>Var</th><th>Type</th><th>Value</th></tr></thead>
+                <tbody id="mem-stack-body"><tr><td colspan="3" class="mem-struct-empty">No data yet.</td></tr></tbody>
+              </table>
+            </div>
+            <div class="mem-struct-card">
+              <div class="mem-struct-head" id="mem-heap-head">Heap Refs</div>
+              <table class="mem-struct-table">
+                <thead><tr><th>Var</th><th>Address</th><th>Note</th></tr></thead>
+                <tbody id="mem-heap-body"><tr><td colspan="3" class="mem-struct-empty">No heap references yet.</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div class="mem-overlay-detail" id="mem-overlay-detail">Click any memory cell to jump to its visualization step.</div>
+      </div>
+    </div>
+  </div><!-- /#rp -->
+
+</div><!-- /#layout -->
+
+<div id="chat-page">
+  <div class="cp-wrap">
+    <div class="cp-side">
+      <div class="cp-head">
+        <div class="cp-title" id="chat-page-title">AI Chats</div>
+        <button class="chat-new" id="chat-new-btn" onclick="newChat()">+ New Chat</button>
+      </div>
+      <div class="chat-sessions" id="chat-page-sessions" style="padding:10px"></div>
+    </div>
+    <div class="cp-main">
+      <div class="cp-main-head">
+        <div class="aibtitle" style="margin:0" id="chat-conversation-title">💬 Conversation</div>
+        <button class="cp-close" id="chat-page-close" onclick="closeChatPage()">Close</button>
+      </div>
+      <div class="chat-window cp-window" id="chat-page-window">
+        <div class="chat-text">Type a C question in the home chat bar to start.</div>
+      </div>
+      <div class="cp-compose">
+        <textarea id="cp-input" rows="2" placeholder="Ask a C question..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat('chatPage');}"></textarea>
+        <button id="cp-send" onclick="sendChat('chatPage')">↑</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MOBILE OVERLAY -->
+<div id="overlay" onclick="closeMob()"></div>
+<script src="/socket.io/socket.io.js" defer></script>
+<script src="/index.js?v=20260309n" defer></script>
+</body>
+</html>
