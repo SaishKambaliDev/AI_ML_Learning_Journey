@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MemFlow AI</title>
+<script>
+(() => {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const requestedLang = String(params.get('lang') || '').toLowerCase();
+    const supported = ['hi', 'bn', 'te', 'ta', 'mr'];
+    const storedLang = String(localStorage.getItem('memflow_ui_language') || 'en').toLowerCase();
+    const resolvedLang = supported.includes(requestedLang)
+      ? requestedLang
+      : (supported.includes(storedLang) ? storedLang : 'en');
+    if (resolvedLang === 'en') {
+      params.delete('lang');
+    } else {
+      params.set('lang', resolvedLang);
+    }
+    const query = params.toString();
+    const target = `/${query ? `?${query}` : ''}${window.location.hash || ''}`;
+    window.location.replace(target);
+  } catch (_) {
+    window.location.replace(`/${window.location.hash || ''}`);
+  }
+})();
+</script>
+</head>
+<body></body>
+</html>
